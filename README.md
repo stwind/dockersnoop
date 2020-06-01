@@ -1,6 +1,6 @@
 # dockersnoop
 
-Intercept gRPC traffic between docker and containerd using eBPF. In the spirit of [bcc](https://github.com/iovisor/bcc/) `xxxsnoop` tools and inspired by [sockdump](https://github.com/mechpen/sockdump) and [grpc-snoop](https://github.com/nrc/grpc-snoop).
+Intercept gRPC traffic between Docker and [Containerd](https://github.com/containerd/containerd) by passively captureing `AF_UNIX` packets with eBPF. In the spirit of [bcc](https://github.com/iovisor/bcc/) `xxxsnoop` tools and inspired by [sockdump](https://github.com/mechpen/sockdump) and [grpc-snoop](https://github.com/nrc/grpc-snoop).
 
 ## Requirements
 
@@ -75,7 +75,7 @@ Status: Downloaded newer image for alpine:latest
 hello
 ```
 
-And we can see how `docker` and `containerd `talked to each other
+And we can see how `docker` and `containerd`talked to each other
 
 ```
 dockerd        14768  14770  14455  REQ    9      /containerd.services.leases.v1.Leases/Create            "&CreateRequest{ID:206405101-C1nU,Labels:map[string]string{containerd.io/gc.expire: 2020-06-02T16:16
