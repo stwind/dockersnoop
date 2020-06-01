@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -218,10 +219,10 @@ func makeFilter(path string) string {
 	return "if (" + strings.Join(comps, " && ") + ") match = 1;"
 }
 
-func newProgram() string {
+func newProgram(address string) string {
 	replaces := map[string]string{
 		"__NUM_CPUS__":            strconv.Itoa(runtime.NumCPU()),
-		"__FILTER__":              makeFilter("/run/containerd/containerd.sock"),
+		"__FILTER__":              makeFilter(address),
 		"__SS_MAX_SEG_SIZE__":     strconv.Itoa(maxSegSize),
 		"__SS_MAX_SEGS_PER_MSG__": "10",
 	}
@@ -389,7 +390,10 @@ func run(channel chan []byte) {
 }
 
 func main() {
-	program := newProgram()
+	address := flag.String("address", "/run/containerd/containerd.sock", "containerd sock file")
+	flag.Parse()
+
+	program := newProgram(*address)
 
 	m := bpf.NewModule(program, []string{})
 	defer m.Close()
