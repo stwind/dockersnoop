@@ -115,7 +115,6 @@ int probe_unix_stream_sendmsg(struct pt_regs *ctx,
 
 			bpf_probe_read(
 					&packet->data,
-					// check size in args to make compiler/validator happy
 					n > sizeof(packet->data) ? sizeof(packet->data) : n,
 					buf);
 
@@ -123,7 +122,6 @@ int probe_unix_stream_sendmsg(struct pt_regs *ctx,
 			events.perf_submit(
 					ctx,
 					packet,
-					// check size in args to make compiler/validator happy
 					n > sizeof(*packet) ? sizeof(*packet) : n);
 			iov++;
 	}

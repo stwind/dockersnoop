@@ -36,6 +36,7 @@ $ containerd
 Now we can start snooping
 
 ```sh
+$ cd vagrant
 $ go run main.go
 COMM           PID    TID    PEER   TYPE   STREAM METHOD                                                  MESSAGE
 ```
