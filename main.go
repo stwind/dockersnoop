@@ -234,13 +234,11 @@ func newProgram(address string) string {
 func attachKprobe(m *bpf.Module) {
 	kprobe, err := m.LoadKprobe("probe_unix_stream_sendmsg")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load kprobe: %s\n", err)
-		os.Exit(1)
+		log.Fatalf("Failed to load kprobe: %s\n", err)
 	}
 
 	if err := m.AttachKprobe("unix_stream_sendmsg", kprobe, -1); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to attach kprobe: %s\n", err)
-		os.Exit(1)
+		log.Fatalf("Failed to attach kprobe: %s\n", err)
 	}
 }
 
@@ -401,8 +399,7 @@ func main() {
 	channel := make(chan []byte, 1000)
 	perfMap, err := bpf.InitPerfMap(bpf.NewTable(m.TableId("events"), m), channel, nil)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to init perf map: %s\n", err)
-		os.Exit(1)
+		log.Fatalf("Failed to init perf map: %s\n", err)
 	}
 
 	sig := make(chan os.Signal, 1)
