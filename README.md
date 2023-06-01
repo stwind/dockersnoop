@@ -1,131 +1,69 @@
-# dockersnoop
+# containerdsnoop
 
-Intercept gRPC traffic between Docker and [Containerd](https://github.com/containerd/containerd) by passively captureing `AF_UNIX` packets with eBPF. In the spirit of [bcc](https://github.com/iovisor/bcc/) `xxxsnoop` tools and inspired by [sockdump](https://github.com/mechpen/sockdump) and [grpc-snoop](https://github.com/nrc/grpc-snoop).
+Intercept gRPC traffic to [containerd](https://github.com/containerd/containerd) by passively captureing `AF_UNIX` packets with eBPF.
+
+This program was originally written by [stwind](https://github.com/stwind) as [dockersnoop](https://github.com/stwind/dockersnoop). It was inspired [bcc](https://github.com/iovisor/bcc/)-based tools such as `xxxsnoop`, [sockdump](https://github.com/mechpen/sockdump), [grpc-snoop](https://github.com/nrc/grpc-snoop).
 
 ## Requirements
 
 Tested with
 
-* Ubuntu 18.04
-* Docker 19.03
-* containerd 1.2.13
+* `Ubuntu==22.04`
+* `containerd==1.7.1`
+* `bcc==0.24.0`
+
+Kubernetes `v1.27.1` was used to deploy the pod, although as long as the `containerd` version is the same, it should work with other versions.
 
 ## Setup
 
-Use Vagrant and you are all set
+We assume you already have a Kubernetes cluster up and running. Then, on each node, install `go` and `bcc`:
 
-```sh
-$ vagrant up
-$ vagrant ssh
+```bash
+curl -sLO https://dl.google.com/go/go1.20.4.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.20.4.linux-amd64.tar.gz
+echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/golang.sh
+
+apt-get -yqq update && apt-get install -yqq python3-pip linux-headers-$(uname -r) bison build-essential \
+  cmake flex g++ git libelf-dev zlib1g-dev libfl-dev systemtap-sdt-dev binutils-dev llvm-8-dev llvm-8-runtime \
+  libclang-8-dev clang-8 arping netperf iperf3 python3-distutils
+wget https://github.com/iovisor/bcc/releases/download/v0.24.0/bcc-src-with-submodule.tar.gz
+pip install setuptools
+tar xvf bcc-src-with-submodule.tar.gz && rm bcc-src-with-submodule.tar.gz
+mkdir bcc/build; cd bcc/build
+cmake -DPYTHON_CMD=python3 ..
+make -j8 && make install && ldconfig
 ```
 
 ## Running
 
 Due to the stateful nature of HTTP/2 [HPACK](https://http2.github.io/http2-spec/compression.html) header compression mechanism, one cannot capture the headers without snooping the entire connection. So we have to stop `dockerd` and `containerd` first.
 
-```sh
-$ systemctl stop containerd
+```bash
+systemctl stop containerd
 ```
 
-And restart `containerd`
+Now we can start snooping. In a separate terminal, run:
 
-```sh
-$ containerd
+```bash
+go run main.go
+COMM           PID    TID     PEER     TYPE   STREAM METHOD                                                  MESSAGE
 ```
 
-Now we can start snooping
+Now we can restart `containerd`:
 
-```sh
-$ cd vagrant
-$ go run main.go
-COMM           PID    TID    PEER   TYPE   STREAM METHOD                                                  MESSAGE
+```bash
+systemctl start containerd
 ```
 
-And start `dockerd` in another terminal
+We can see the interaction between `crictl`, `containerd` and `kubelet`:
 
-```sh
-$ dockerd
+```plaintext
+COMM           PID     TID     PEER    TYPE   STREAM METHOD                                                  MESSAGE
+kubelet        1732336 1732336 2991846 REQ    95     /runtime.v1.RuntimeService/ListPodSandbox               "&ListPodSandboxRequest{Filter:nil,}"
+containerd     2991846 2991855 1732336 RESP   95     /runtime.v1.RuntimeService/ListPodSandbox               "&ListPodSandboxResponse{Items:[]*PodSandbox{&PodSandbox{Id:82328368a32b7ed47cb425332f053506ed3bae5c
+kubelet        1732336 1732357 2991846 REQ    97     /runtime.v1.RuntimeService/ListContainers               "&ListContainersRequest{Filter:&ContainerFilter{Id:,State:nil,PodSandboxId:,LabelSelector:map[string
+containerd     2991846 2991855 1732336 RESP   97     /runtime.v1.RuntimeService/ListContainers               "&ListContainersResponse{Containers:[]*Container{&Container{Id:5983f1bd0899c5518872bfdd03cf2a65634c7
+crictl         2992048 2992051 2991846 REQ    1      /runtime.v1.RuntimeService/Version                      "&VersionRequest{Version:,}"
 ```
 
-We can see initial interaction between `dockerd` and `containerd`
-
-```
-COMM           PID    TID    PEER   TYPE   STREAM METHOD                                                  MESSAGE
-dockerd        14768  14770  14455  REQ    1      /containerd.services.namespaces.v1.Namespaces/Get       "&GetNamespaceRequest{Name:moby,}"
-containerd     14455  14462  14768  RESP   1      /containerd.services.namespaces.v1.Namespaces/Get       "&GetNamespaceResponse{Namespace:Namespace{Name:moby,Labels:map[string]string{},},}"
-dockerd        14768  14776  14455  REQ    1      /containerd.services.namespaces.v1.Namespaces/Get       "&GetNamespaceRequest{Name:plugins.moby,}"
-containerd     14455  14462  14768  RESP   1      /containerd.services.namespaces.v1.Namespaces/Get       "&GetNamespaceResponse{Namespace:Namespace{Name:plugins.moby,Labels:map[string]string{},},}"
-dockerd        14768  14777  14455  REQ    3      /containerd.services.events.v1.Events/Subscribe         "&SubscribeRequest{Filters:[namespace==plugins.moby,topic~=|^/tasks/|],}"
-dockerd        14768  14776  14455  REQ    3      /containerd.services.events.v1.Events/Subscribe         "&SubscribeRequest{Filters:[namespace==moby,topic~=|^/tasks/|],}"
-dockerd        14768  14776  14455  REQ    5      /containerd.services.version.v1.Version/Version         ""
-containerd     14455  14462  14768  RESP   5      /containerd.services.version.v1.Version/Version         "&VersionResponse{Version:1.2.13,Revision:7ad184331fa3e55e52b890ea95e65ba581ae3429,}"
-dockerd        14768  14775  14455  REQ    7      /containerd.services.version.v1.Version/Version         ""
-containerd     14455  14460  14768  RESP   7      /containerd.services.version.v1.Version/Version         "&VersionResponse{Version:1.2.13,Revision:7ad184331fa3e55e52b890ea95e65ba581ae3429,}"
-```
-
-Let's start a container and see what is going on
-
-```sh
-$ docker run -ti --rm alpine echo hello
-Unable to find image 'alpine:latest' locally
-latest: Pulling from library/alpine
-df20fa9351a1: Pull complete
-Digest: sha256:185518070891758909c9f839cf4ca393ee977ac378609f700f60a771a2dfe321
-Status: Downloaded newer image for alpine:latest
-hello
-```
-
-And we can see how `docker` and `containerd`talked to each other
-
-```
-dockerd        14768  14770  14455  REQ    9      /containerd.services.leases.v1.Leases/Create            "&CreateRequest{ID:206405101-C1nU,Labels:map[string]string{containerd.io/gc.expire: 2020-06-02T16:16
-containerd     14455  14460  14768  RESP   9      /containerd.services.leases.v1.Leases/Create            "&CreateRequest{ID:\n\x0e206405101-C1nU\x12\v\b\xed\xd3\xd4\xf6\x05\x10\xfb\xe9\x8fc\x1a/\n\x17conta
-dockerd        14768  14773  14455  REQ    11     /containerd.services.containers.v1.Containers/Create    "&CreateContainerRequest{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f
-containerd     14455  14460  14768  RESP   11     /containerd.services.containers.v1.Containers/Create    "&CreateContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9
-dockerd        14768  14912  14455  REQ    13     /containerd.services.leases.v1.Leases/Delete            "&DeleteRequest{ID:206405101-C1nU,Sync:false,}"
-containerd     14455  14462  14768  RESP   13     /containerd.services.leases.v1.Leases/Delete            ""
-dockerd        14768  14770  14455  REQ    15     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14460  14768  RESP   15     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14770  14455  REQ    17     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14462  14768  RESP   17     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14776  14455  REQ    19     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14462  14768  RESP   19     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14773  14455  REQ    21     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14462  14768  RESP   21     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14773  14455  REQ    23     /containerd.services.tasks.v1.Tasks/Create              "&CreateTaskRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,Roo
-containerd     14455  14460  14768  RESP   3      /containerd.services.events.v1.Events/Subscribe         "&Envelope{Timestamp:2020-06-01 16:16:45.694094644 +0000 UTC,Namespace:moby,Topic:/tasks/create,Even
-containerd     14455  14565  14768  RESP   23     /containerd.services.tasks.v1.Tasks/Create              "&CreateTaskResponse{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,Pi
-dockerd        14768  14770  14455  REQ    25     /containerd.services.tasks.v1.Tasks/Start               "&StartRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,ExecID:,
-containerd     14455  14565  14768  RESP   3      /containerd.services.events.v1.Events/Subscribe         "&Envelope{Timestamp:2020-06-01 16:16:45.706865362 +0000 UTC,Namespace:moby,Topic:/tasks/start,Event
-containerd     14455  14565  14768  RESP   25     /containerd.services.tasks.v1.Tasks/Start               "&StartResponse{Pid:14962,}"
-dockerd        14768  14773  14455  REQ    27     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14565  14768  RESP   27     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14773  14455  REQ    29     /containerd.services.tasks.v1.Tasks/Get                 "&GetRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,ExecID:,}"
-containerd     14455  14565  14768  RESP   29     /containerd.services.tasks.v1.Tasks/Get                 "&GetResponse{Process:&containerd_v1_types.Process{ContainerID:,ID:0d4b83534389f9594bb6f2b895c68c50d
-dockerd        14768  14912  14455  REQ    31     /containerd.services.tasks.v1.Tasks/ResizePty           "&ResizePtyRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,Exec
-containerd     14455  14565  14768  RESP   31     /containerd.services.tasks.v1.Tasks/ResizePty           ""
-containerd     15006  15012  14455  REQ    1      /containerd.services.events.v1.Events/Publish           "&PublishRequest{Topic:/tasks/exit,Event:&google_protobuf1.Any{TypeUrl:containerd.events.TaskExit,Va
-containerd     14455  14565  14768  RESP   3      /containerd.services.events.v1.Events/Subscribe         "&Envelope{Timestamp:2020-06-01 16:16:45.760203741 +0000 UTC,Namespace:moby,Topic:/tasks/exit,Event:
-containerd     14455  14565  15006  RESP   1      /containerd.services.events.v1.Events/Publish           ""
-dockerd        14768  14770  14455  REQ    33     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14565  14768  RESP   33     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14773  14455  REQ    35     /containerd.services.tasks.v1.Tasks/Get                 "&GetRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,ExecID:,}"
-containerd     14455  14565  14768  RESP   35     /containerd.services.tasks.v1.Tasks/Get                 "&GetResponse{Process:&containerd_v1_types.Process{ContainerID:,ID:0d4b83534389f9594bb6f2b895c68c50d
-dockerd        14768  14773  14455  REQ    37     /containerd.services.tasks.v1.Tasks/Get                 "&GetRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,ExecID:,}"
-containerd     14455  14565  14768  RESP   37     /containerd.services.tasks.v1.Tasks/Get                 "&GetResponse{Process:&containerd_v1_types.Process{ContainerID:,ID:0d4b83534389f9594bb6f2b895c68c50d
-dockerd        14768  14773  14455  REQ    39     /containerd.services.tasks.v1.Tasks/Delete              "&DeleteTaskRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14929  14768  RESP   39     /containerd.services.tasks.v1.Tasks/Delete              "&DeleteResponse{ID:,Pid:14962,ExitStatus:0,ExitedAt:2020-06-01 16:16:45.7326066 +0000 UTC,}"
-containerd     14455  14929  14768  RESP   3      /containerd.services.events.v1.Events/Subscribe         "&Envelope{Timestamp:2020-06-01 16:16:45.787312911 +0000 UTC,Namespace:moby,Topic:/tasks/delete,Even
-dockerd        14768  14776  14455  REQ    41     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14929  14768  RESP   41     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14776  14455  REQ    43     /containerd.services.tasks.v1.Tasks/Get                 "&GetRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,ExecID:,}"
-dockerd        14768  14912  14455  REQ    45     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14565  14768  RESP   45     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14776  14455  REQ    47     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14462  14768  RESP   47     /containerd.services.containers.v1.Containers/Get       "&GetContainerResponse{Container:Container{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f47
-dockerd        14768  14776  14455  REQ    49     /containerd.services.tasks.v1.Tasks/Get                 "&GetRequest{ContainerID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,ExecID:,}"
-dockerd        14768  14776  14455  REQ    51     /containerd.services.containers.v1.Containers/Get       "&GetContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-dockerd        14768  14776  14455  REQ    53     /containerd.services.containers.v1.Containers/Delete    "&DeleteContainerRequest{ID:0d4b83534389f9594bb6f2b895c68c50dd7d089d9952bba97c9f478c77190405,}"
-containerd     14455  14464  14768  RESP   53     /containerd.services.containers.v1.Containers/Delete    ""
-```
-
+By deploying a pod on the node, we can see the API calls to `containerd`.

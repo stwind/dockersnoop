@@ -7,7 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
+	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"log"
 	"os"
 	"os/signal"
@@ -30,7 +30,6 @@ import (
 	snapshotsapi "github.com/containerd/containerd/api/services/snapshots/v1"
 	tasksapi "github.com/containerd/containerd/api/services/tasks/v1"
 	versionservice "github.com/containerd/containerd/api/services/version/v1"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/golang/protobuf/ptypes/empty"
 
@@ -193,6 +192,39 @@ var serviceMsgs = map[string][]proto.Message{
 	"/containerd.services.tasks.v1.Tasks/Update":                  {new(tasksapi.UpdateTaskRequest), new(empty.Empty)},
 	"/containerd.services.tasks.v1.Tasks/Metrics":                 {new(tasksapi.MetricsRequest), new(tasksapi.MetricsResponse)},
 	"/containerd.services.tasks.v1.Tasks/Wait":                    {new(tasksapi.WaitRequest), new(tasksapi.WaitResponse)},
+	"/runtime.v1.RuntimeService/Version":                          {new(runtimeapi.VersionRequest), new(runtimeapi.VersionResponse)},
+	"/runtime.v1.RuntimeService/RunPodSandbox":                    {new(runtimeapi.RunPodSandboxRequest), new(runtimeapi.RunPodSandboxResponse)},
+	"/runtime.v1.RuntimeService/StopPodSandbox":                   {new(runtimeapi.StopPodSandboxRequest), new(runtimeapi.StopPodSandboxResponse)},
+	"/runtime.v1.RuntimeService/RemovePodSandbox":                 {new(runtimeapi.RemovePodSandboxRequest), new(runtimeapi.RemovePodSandboxResponse)},
+	"/runtime.v1.RuntimeService/PodSandboxStatus":                 {new(runtimeapi.PodSandboxStatusRequest), new(runtimeapi.PodSandboxStatusResponse)},
+	"/runtime.v1.RuntimeService/ListPodSandbox":                   {new(runtimeapi.ListPodSandboxRequest), new(runtimeapi.ListPodSandboxResponse)},
+	"/runtime.v1.RuntimeService/CreateContainer":                  {new(runtimeapi.CreateContainerRequest), new(runtimeapi.CreateContainerResponse)},
+	"/runtime.v1.RuntimeService/StartContainer":                   {new(runtimeapi.StartContainerRequest), new(runtimeapi.StartContainerResponse)},
+	"/runtime.v1.RuntimeService/StopContainer":                    {new(runtimeapi.StopContainerRequest), new(runtimeapi.StopContainerResponse)},
+	"/runtime.v1.RuntimeService/RemoveContainer":                  {new(runtimeapi.RemoveContainerRequest), new(runtimeapi.RemoveContainerResponse)},
+	"/runtime.v1.RuntimeService/ListContainers":                   {new(runtimeapi.ListContainersRequest), new(runtimeapi.ListContainersResponse)},
+	"/runtime.v1.RuntimeService/ContainerStatus":                  {new(runtimeapi.ContainerStatusRequest), new(runtimeapi.ContainerStatusResponse)},
+	"/runtime.v1.RuntimeService/UpdateContainerResources":         {new(runtimeapi.UpdateContainerResourcesRequest), new(runtimeapi.UpdateContainerResourcesResponse)},
+	"/runtime.v1.RuntimeService/ReopenContainerLog":               {new(runtimeapi.ReopenContainerLogRequest), new(runtimeapi.ReopenContainerLogResponse)},
+	"/runtime.v1.RuntimeService/ExecSync":                         {new(runtimeapi.ExecSyncRequest), new(runtimeapi.ExecSyncResponse)},
+	"/runtime.v1.RuntimeService/Exec":                             {new(runtimeapi.ExecRequest), new(runtimeapi.ExecResponse)},
+	"/runtime.v1.RuntimeService/Attach":                           {new(runtimeapi.AttachRequest), new(runtimeapi.AttachResponse)},
+	"/runtime.v1.RuntimeService/PortForward":                      {new(runtimeapi.PortForwardRequest), new(runtimeapi.PortForwardResponse)},
+	"/runtime.v1.RuntimeService/ContainerStats":                   {new(runtimeapi.ContainerStatsRequest), new(runtimeapi.ContainerStatsResponse)},
+	"/runtime.v1.RuntimeService/ListContainerStats":               {new(runtimeapi.ListContainerStatsRequest), new(runtimeapi.ListContainerStatsResponse)},
+	"/runtime.v1.RuntimeService/PodSandboxStats":                  {new(runtimeapi.PodSandboxStatsRequest), new(runtimeapi.PodSandboxStatsResponse)},
+	"/runtime.v1.RuntimeService/ListPodSandboxStats":              {new(runtimeapi.ListPodSandboxStatsRequest), new(runtimeapi.ListPodSandboxStatsResponse)},
+	"/runtime.v1.RuntimeService/UpdateRuntimeConfig":              {new(runtimeapi.UpdateRuntimeConfigRequest), new(runtimeapi.UpdateRuntimeConfigResponse)},
+	"/runtime.v1.RuntimeService/Status":                           {new(runtimeapi.StatusRequest), new(runtimeapi.StatusResponse)},
+	"/runtime.v1.RuntimeService/CheckpointContainer":              {new(runtimeapi.CheckpointContainerRequest), new(runtimeapi.CheckpointContainerResponse)},
+	//	"/runtime.v1.RuntimeService/GetContainerEvents": {new(runtimeapi.GetEventsRequest), new(runtimeapi.stream ContainerEventResponse)},
+	"/runtime.v1.RuntimeService/ListMetricDescriptors": {new(runtimeapi.ListMetricDescriptorsRequest), new(runtimeapi.ListMetricDescriptorsResponse)},
+	"/runtime.v1.RuntimeService/ListPodSandboxMetrics": {new(runtimeapi.ListPodSandboxMetricsRequest), new(runtimeapi.ListPodSandboxMetricsResponse)},
+	"/runtime.v1.ImageService/ListImages":              {new(runtimeapi.ListImagesRequest), new(runtimeapi.ListImagesResponse)},
+	"/runtime.v1.ImageService/ImageStatus":             {new(runtimeapi.ImageStatusRequest), new(runtimeapi.ImageStatusResponse)},
+	"/runtime.v1.ImageService/PullImage":               {new(runtimeapi.PullImageRequest), new(runtimeapi.PullImageResponse)},
+	"/runtime.v1.ImageService/RemoveImage":             {new(runtimeapi.RemoveImageRequest), new(runtimeapi.RemoveImageResponse)},
+	"/runtime.v1.ImageService/ImageFsInfo":             {new(runtimeapi.ImageFsInfoRequest), new(runtimeapi.ImageFsInfoResponse)},
 }
 
 type packet struct {
@@ -210,7 +242,7 @@ const (
 
 func makeFilter(path string) string {
 	chars := []byte(path + "\000")
-	comps := []string{}
+	comps := make([]string, 0)
 	for i, b := range chars {
 		comps = append(comps, fmt.Sprintf("*(path+%d) == %d", i, b))
 	}
@@ -258,7 +290,7 @@ type actor struct {
 
 func newFramer() *actor {
 	buffer := bytes.NewBuffer([]byte{})
-	framer := http2.NewFramer(ioutil.Discard, buffer)
+	framer := http2.NewFramer(io.Discard, buffer)
 	framer.MaxHeaderListSize = uint32(16 << 20)
 	framer.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
 	return &actor{
@@ -267,7 +299,7 @@ func newFramer() *actor {
 	}
 }
 
-func run(channel chan []byte) {
+func run(channel chan []byte, completeContent bool) {
 	framers := make(map[uint64]*actor)
 	paths := make(map[uint32]string)
 	side := make(map[uint32]int)
@@ -315,6 +347,7 @@ func run(channel chan []byte) {
 			switch frame := frame.(type) {
 			case *http2.MetaHeadersFrame:
 				for _, hf := range frame.Fields {
+					// log.Printf("stream: %d, header: %s, fields: %s\n", id, hf.Name, hf.Value)
 					if hf.Name == ":path" {
 						side[id] = 0
 						paths[id] = hf.Value
@@ -351,7 +384,13 @@ func run(channel chan []byte) {
 					}
 				}
 
+				if _, ok := serviceMsgs[path]; !ok {
+					log.Printf("missing service for path: %s\n", path)
+					break
+				}
+
 				msg := proto.Clone(serviceMsgs[path][side[id]])
+
 				if err := proto.Unmarshal(buf, msg); err != nil {
 					if err == io.ErrUnexpectedEOF {
 						// frame splited in two packets, current in a buffer for later
@@ -374,10 +413,11 @@ func run(channel chan []byte) {
 
 				msgStr := fmt.Sprintf("%q", msg)
 				l := len(msgStr)
-				if l > 100 {
+				if !completeContent && l > 100 {
 					l = 100
 				}
-				fmt.Printf(header, comm, pkt.Pid, pkt.Tid, pkt.PeerPid, dType, id, path, msgStr[:l])
+				commz := strings.Replace(comm, "\x00", "", -1)
+				fmt.Printf(header, commz, pkt.Pid, pkt.Tid, pkt.PeerPid, dType, id, path, msgStr[:l])
 			default:
 			}
 		}
@@ -387,6 +427,7 @@ func run(channel chan []byte) {
 
 func main() {
 	address := flag.String("address", "/run/containerd/containerd.sock", "containerd sock file")
+	completeContent := flag.Bool("complete_content", false, "complete content")
 	flag.Parse()
 
 	program := newProgram(*address)
@@ -405,7 +446,7 @@ func main() {
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, os.Kill)
 
-	go run(channel)
+	go run(channel, *completeContent)
 
 	perfMap.Start()
 	<-sig
