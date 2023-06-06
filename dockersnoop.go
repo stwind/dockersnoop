@@ -171,7 +171,7 @@ func newProgram(address string) string {
 		"__SS_MAX_SEGS_PER_MSG__": "10",
 	}
 	// read program from file
-	program_bytes, err := os.ReadFile("filter.c")
+	program_bytes, err := os.ReadFile("bpf/filter.c")
 	if err != nil {
 		log.Fatalf("Failed to read program: %s\n", err)
 	}
