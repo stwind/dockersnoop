@@ -40,6 +40,9 @@ import (
 
 import "C"
 
+//go:embed bpf/filter.c
+var bpfFile embed.FS
+
 const (
 	maxSegSize = 1024 * 50
 )
@@ -172,8 +175,7 @@ func newProgram(address string) string {
 		"__SS_MAX_SEGS_PER_MSG__": "10",
 	}
 	// read program from file
-	var f embed.FS
-	program_bytes, err := f.ReadFile("bpf/filter.c")
+	program_bytes, err := bpfFile.ReadFile("bpf/filter.c")
 	if err != nil {
 		log.Fatalf("Failed to read program: %s\n", err)
 	}
